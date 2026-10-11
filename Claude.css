@@ -71,3 +71,38 @@ body.code-palette-light {
 #editor .cm-content .cm-md-inlinecode {
   color: #b8452a;
 }
+
+/* ---- 顶栏与标签栏 ----
+
+   App 管这一行叫 chrome，颜色全走变量，接上就能整套换。
+   **这几个变量必须定义在 body 上，不能写 :root**：自定义属性在「定义处」解析，
+   而 --bg-color / --text-color 是主题在 body.theme-* 上覆盖的、html 看不到——
+   写 :root 会把浅色主题的混合值烤死（App 源码里专门注明过这条）。
+   再叠 body.theme-custom 提一档，免得赌注入顺序。
+
+   取值仍走 Anthropic 灰阶：gray-200 比纸（gray-150）深一档，当顶栏与侧栏轨道的底；
+   gray-250 当全站描边，与 --border-color 同色。注意 --chrome-bg 同时是侧栏那个
+   「文件 / 大纲」轨道（.file-panel-tabs）的底，所以只能停在暖灰上，设成纸色
+   侧栏那块会跟正文糊成一片。 */
+body.theme-custom {
+  --chrome-bg: #e8e6dc;
+  --chrome-bg-hover: #dedcd1;
+  --shell-line: #dedcd1;
+  /* 顶栏那四个图标按钮默认是 --text-muted 的 55% 透明，压在暖灰上几乎看不见 */
+  --row-icon-color: color-mix(in srgb, var(--text-secondary) 88%, transparent);
+}
+
+/* 标签文字：App 默认未激活用 --text-muted(#98938a)、悬停用 --text-secondary，
+   落到暖灰底上偏灰。提到次级色、悬停用正文色，安静但读得清。
+   选择器都带 #titlebar：为的是压过 App 那几条类选择器，不赌注入顺序。 */
+#titlebar .tab-entry { color: var(--text-secondary); }
+#titlebar .tab-entry:hover { color: var(--text-color); }
+#titlebar .tab-entry.active { color: var(--text-color); }
+
+/* 只有一个标签时把整条标签栏收起来：它是「有多个文档」才需要的家具，
+   单文档时纯属占地方。+ 按钮和右侧四个图标是 #titlebar 的子元素、不在
+   #tab-bar 里，所以不受影响；开出第二个标签，这条栏自己回来
+   （:has 跟着 DOM 走，不必注入脚本）。 */
+#tab-bar:not(:has(.tab-entry ~ .tab-entry)) {
+  display: none !important;
+}

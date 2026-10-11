@@ -66,6 +66,44 @@ ColaMD 2.7 起编辑器内核从 Milkdown 换成 CodeMirror，行类名的写法
 
 运算符、标点、括号刻意不给颜色（跟随代码块正文色），整块才不会花。注意这条覆盖挂在 `body.code-palette-light` 下：一旦把 `--code-block-bg` 改成深色，ColaMD 会切去深色那套，这段就不再生效，得换个选择器重写。
 
+## 顶栏与标签栏
+
+顶栏这一整行在 ColaMD 内部叫 chrome，底色与描边都走 CSS 变量，所以主题也管得到——**但这几个变量必须定义在 `body` 上，不能写 `:root`**：自定义属性在「定义处」解析，App 把 chrome 变量定义在 `body`、各内置主题在 `body.theme-*` 上覆盖基础变量，而 `html` 看不到那些覆盖（App 源码原话：These MUST live on body, never on `:root`）。写在 `:root` 里是**静默失效**——同一份文件里的其他规则照旧生效，只有这几个变量停在默认值。本主题把它们写在 `body.theme-custom` 下。
+
+| 变量 | 本主题取值 | 作用 |
+|---|---|---|
+| `--chrome-bg` | `#e8e6dc`（gray-200） | 顶栏底色，比纸（gray-150）深一档；**侧栏的「文件 / 大纲」轨道（`.file-panel-tabs`）也用它**，所以不能设成纸色，否则侧栏跟正文糊成一片 |
+| `--chrome-bg-hover` | `#dedcd1`（gray-250） | 标签悬停底色 |
+| `--shell-line` | `#dedcd1`（gray-250） | 壳里所有接缝：标签边界、顶栏基线、面板边缘 |
+| `--row-icon-color` | `--text-secondary` 的 88% | 顶栏那四个图标按钮；App 默认是 `--text-muted` 的 55% 透明，压在暖灰上几乎看不见 |
+
+外加两条规则：
+
+- **标签文字**：未激活 `--text-secondary`、悬停与激活 `--text-color`。选择器带 `#titlebar` 前缀，压过 App 自己的类选择器，不赌注入顺序。
+- **只有一个标签时整条标签栏收起**：`#tab-bar:not(:has(.tab-entry ~ .tab-entry)) { display: none !important }`。`+` 按钮与右侧图标是 `#titlebar` 的子元素、不在 `#tab-bar` 里，所以不跟着消失；开出第二个标签，这条栏自己回来。
+
+## 原生菜单栏默认隐藏（Linux）
+
+Linux 上 ColaMD 会把 Electron 的原生菜单栏（`File / Edit / View / Theme / Help`）显示在窗口最上面，**它的颜色改不动**：那条栏由主进程绘制、不在网页里，任何 CSS 主题都够不着——`nativeTheme.themeSource = "light"`、`GTK_THEME=Adwaita:light` 启动之类的路子实测都无效。压在暖米色纸面上，它就是一条黑边。
+
+能改的只有「显 / 隐」，走主进程注入：`launcher/colamd-main-inject.mjs` 连上主进程的 Node inspector（默认只监听 `127.0.0.1`），调
+
+```js
+win.setAutoHideMenuBar(true);
+win.setMenuBarVisibility(false);
+```
+
+启动器里加 `--inspect=9229`，并在后台跑这个脚本：
+
+```sh
+node /path/to/colamd-main-inject.mjs >>/tmp/colamd-main-inject.log 2>&1 &
+exec /path/to/colamd.AppImage --enable-wayland-ime --inspect=9229 "$@"
+```
+
+脚本连上后会按 30ms 重试求值，直到 App 的 bundle 加载完为止——更早时默认执行上下文还是 Electron 自己的 bootstrap，`process.mainModule` 尚未建立、`require` 也不可见。实测补丁落在**窗口创建之前**（日志里 `windows:0`），所以启动时菜单栏一次都不会闪出来。
+
+菜单项没有被删，**按 Alt 仍能唤出**。脚本另挂了 `browser-window-created` 与 `Menu.setApplicationMenu` 两个钩子——切换主题会重建菜单，不挂后者菜单栏会自己冒回来。
+
 ## 代码块字体：需要按环境改
 
 文件末尾的两段 `@font-face` 指向本机字体的**绝对路径**，在你机器上多半不存在，请改成自己的或用不到的整段删掉：
