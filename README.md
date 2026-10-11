@@ -31,6 +31,8 @@ ColaMD 2.7 起编辑器内核从 Milkdown 换成 CodeMirror，行类名的写法
 
 ## 外观
 
+![外观](assets/screenshot.jpg)
+
 底色用的是 Anthropic 设计 token 里的 `--color-gray-150`（`#f0eee6`，Claude 界面的奶油底），相邻表面按同一套官方灰阶错开一档，免得代码块糊进背景里。
 
 | 元素 | 颜色 |
