@@ -1,10 +1,43 @@
-# ColaMD Claude 主题
+# colamd-tweaks
+
+给 [ColaMD](https://colamd.app)（Electron + CodeMirror 的 Markdown 阅读/编辑器）的本机定制合集：一套 Claude 风格的主题 + 一组启动器/注入脚本。
+
+- **主题**（`Claude.css`）——谁都能用，拷进 `~/.colamd/themes/` 即可。
+- **launcher / 注入**（`launcher/`）——**只对本机有意义**：路径写死成 `$HOME/.local/bin/…`、假定从 AppImage 启动、依赖本机装的字体文件。clone 的人忽略这个目录就好。
 
 ![预览](assets/preview.jpg)
 
-给 [ColaMD](https://colamd.app)（Electron + CodeMirror 的 Markdown 阅读/编辑器）用的浅色主题：暖米色纸面 + 陶土橙强调色，取色自 Anthropic Claude 的界面风格。
+## 本机对 ColaMD 做了什么
+
+AppImage 是只读打包，改不了里面的代码，所以除了主题（数据）之外的一切都靠"启动时从外部注入"实现。
+
+| # | 定制 | 效果 | 落点 |
+|---|---|---|---|
+| 1 | 主题 `Claude.css` | 暖米纸面 + 陶土橙；顶栏/标签栏配色；h1 固定红；代码块等宽字体；语法高亮换暖色板；单标签时收起整条标签栏 | `~/.colamd/themes/Claude.css` |
+| 2 | 启动器 `launcher/colamd` | 加 `--enable-wayland-ime`；开渲染层 CDP（9222）与主进程 inspector（9229）；启动后在后台跑两个注入 | `~/.local/bin/colamd`（符号链接） |
+| 3 | 渲染层注入 `launcher/colamd-render-inject.mjs` | 代码块里按 Tab 插真缩进；上游装饰排序 bug 的临时补丁；`+` 右侧加「打开文件」按钮；显出 App 自带的汉堡菜单按钮 | 同上 |
+| 4 | 主进程注入 `launcher/colamd-main-inject.mjs` | 原生菜单栏启动默认隐藏（`Alt` 仍能唤出） | 同上 |
+| 5 | 查询工具 `launcher/colamd-{cdp,main,fonts}.mjs` | 在渲染层/主进程里执行任意 JS 表达式；查节点真正加载的字体文件 | 同上 |
+
+AppImage 本体不在本仓库（`~/.local/bin/colamd.AppImage`，由 App 自带 updater 维护）。
+
+## 目录
+
+```
+Claude.css                    主题本体（纯 CSS）
+launcher/                     本机自用
+├── colamd                    启动器 wrapper（desktop 的 Exec 指向它）
+├── colamd-render-inject.mjs  渲染层注入：Tab 缩进 / 装饰补丁 / 顶栏两个按钮
+├── colamd-main-inject.mjs    主进程注入：隐藏原生菜单栏
+├── colamd-cdp.mjs            渲染层执行 JS
+├── colamd-main.mjs           主进程执行 JS
+└── colamd-fonts.mjs          查真正加载的字体
+assets/                       预览图与截图
+```
 
 ## 安装
+
+### 主题（任何 ColaMD）
 
 ```sh
 mkdir -p ~/.colamd/themes
@@ -17,19 +50,21 @@ cp Claude.css ~/.colamd/themes/
 
 命名相关的坑：ColaMD 用**文件名**做主题标识（`localStorage["colamd-theme"] = "custom:Claude.css"`），所以**重命名文件等于换了一个主题**——旧的选择记录会失效，启动时找不到对应文件，页面会退回无主题样式，重新在菜单里选一次即可。
 
-## 版本适配：2.7 换了编辑器内核
+### launcher / 注入（本机）
 
-ColaMD 2.7 起编辑器内核从 Milkdown 换成 CodeMirror，行类名的写法整个变了。本文件按 2.7+ 写；2.6 及更早的版本上，下面这几条按 `.cm-md-*` 写的规则不会命中任何元素：
+`~/.local/bin/` 里只放符号链接，脚本本体在本仓库：
 
-| 元素 | 2.7+（CodeMirror） | 2.6−（Milkdown） |
-|---|---|---|
-| 一级标题 | `.cm-content .cm-md-atxheading1` | `.ProseMirror h1` |
-| 代码块 | `.cm-content .cm-md-codeblock` | `.ProseMirror pre` |
-| 行内代码 | `.cm-content .cm-md-inlinecode` | `.ProseMirror code` |
+```sh
+for f in colamd colamd-render-inject.mjs colamd-main-inject.mjs colamd-cdp.mjs colamd-main.mjs colamd-fonts.mjs; do
+  ln -sf "$HOME/Projects/colamd-tweaks/launcher/$f" "$HOME/.local/bin/$f"
+done
+```
 
-`:root` 里那套变量两代通用。
+desktop 条目的 `Exec` 指向 `~/.local/bin/colamd`。启动链：wrapper 开两个调试端口 → 后台跑 `colamd-render-inject.mjs`（连 CDP 9222）与 `colamd-main-inject.mjs`（连 inspector 9229）→ 再 `exec` AppImage。两个注入都是独立进程，连不上就自己退出，**不影响 App 启动**；日志分别在 `/tmp/colamd-render-inject.log`、`/tmp/colamd-main-inject.log`。
 
-## 外观
+## 主题细节
+
+### 外观
 
 ![外观](assets/screenshot.jpg)
 
@@ -68,7 +103,7 @@ ColaMD 2.7 起编辑器内核从 Milkdown 换成 CodeMirror，行类名的写法
 
 运算符、标点、括号刻意不给颜色（跟随代码块正文色），整块才不会花。注意这条覆盖挂在 `body.code-palette-light` 下：一旦把 `--code-block-bg` 改成深色，ColaMD 会切去深色那套，这段就不再生效，得换个选择器重写。
 
-## 顶栏与标签栏
+### 顶栏与标签栏
 
 顶栏这一整行在 ColaMD 内部叫 chrome，底色与描边都走 CSS 变量，所以主题也管得到——**但这几个变量必须定义在 `body` 上，不能写 `:root`**：自定义属性在「定义处」解析，App 把 chrome 变量定义在 `body`、各内置主题在 `body.theme-*` 上覆盖基础变量，而 `html` 看不到那些覆盖（App 源码原话：These MUST live on body, never on `:root`）。写在 `:root` 里是**静默失效**——同一份文件里的其他规则照旧生效，只有这几个变量停在默认值。本主题把它们写在 `body.theme-custom` 下。
 
@@ -84,29 +119,19 @@ ColaMD 2.7 起编辑器内核从 Milkdown 换成 CodeMirror，行类名的写法
 - **标签文字**：未激活 `--text-secondary`、悬停与激活 `--text-color`。选择器带 `#titlebar` 前缀，压过 App 自己的类选择器，不赌注入顺序。
 - **只有一个标签时整条标签栏收起**：`#tab-bar:not(:has(.tab-entry ~ .tab-entry)) { display: none !important }`。`+` 按钮与右侧图标是 `#titlebar` 的子元素、不在 `#tab-bar` 里，所以不跟着消失；开出第二个标签，这条栏自己回来。
 
-## 原生菜单栏默认隐藏（Linux）
+### 版本适配：2.7 换了编辑器内核
 
-Linux 上 ColaMD 会把 Electron 的原生菜单栏（`File / Edit / View / Theme / Help`）显示在窗口最上面，**它的颜色改不动**：那条栏由主进程绘制、不在网页里，任何 CSS 主题都够不着——`nativeTheme.themeSource = "light"`、`GTK_THEME=Adwaita:light` 启动之类的路子实测都无效。压在暖米色纸面上，它就是一条黑边。
+ColaMD 2.7 起编辑器内核从 Milkdown 换成 CodeMirror，行类名的写法整个变了。本文件按 2.7+ 写；2.6 及更早的版本上，下面这几条按 `.cm-md-*` 写的规则不会命中任何元素：
 
-能改的只有「显 / 隐」，走主进程注入：`launcher/colamd-main-inject.mjs` 连上主进程的 Node inspector（默认只监听 `127.0.0.1`），调
+| 元素 | 2.7+（CodeMirror） | 2.6−（Milkdown） |
+|---|---|---|
+| 一级标题 | `.cm-content .cm-md-atxheading1` | `.ProseMirror h1` |
+| 代码块 | `.cm-content .cm-md-codeblock` | `.ProseMirror pre` |
+| 行内代码 | `.cm-content .cm-md-inlinecode` | `.ProseMirror code` |
 
-```js
-win.setAutoHideMenuBar(true);
-win.setMenuBarVisibility(false);
-```
+`:root` 里那套变量两代通用。
 
-启动器里加 `--inspect=9229`，并在后台跑这个脚本：
-
-```sh
-node /path/to/colamd-main-inject.mjs >>/tmp/colamd-main-inject.log 2>&1 &
-exec /path/to/colamd.AppImage --enable-wayland-ime --inspect=9229 "$@"
-```
-
-脚本连上后会按 30ms 重试求值，直到 App 的 bundle 加载完为止——更早时默认执行上下文还是 Electron 自己的 bootstrap，`process.mainModule` 尚未建立、`require` 也不可见。实测补丁落在**窗口创建之前**（日志里 `windows:0`），所以启动时菜单栏一次都不会闪出来。
-
-菜单项没有被删，**按 Alt 仍能唤出**。脚本另挂了 `browser-window-created` 与 `Menu.setApplicationMenu` 两个钩子——切换主题会重建菜单，不挂后者菜单栏会自己冒回来。
-
-## 代码块字体：需要按环境改
+### 代码块字体：需要按环境改
 
 文件末尾的两段 `@font-face` 指向本机字体的**绝对路径**，在你机器上多半不存在，请改成自己的或用不到的整段删掉：
 
@@ -119,9 +144,62 @@ exec /path/to/colamd.AppImage --enable-wayland-ime --inspect=9229 "$@"
 
 **为什么绕这一圈**：在部分 Linux 上，按族名写 `'JetBrains Mono'` 之类会被 fontconfig 规则劫持，实际渲染成另一个字体（可用 `fc-match "JetBrains Mono"` 核对——返回的不是 JetBrains 即中招）。`@font-face` + `file://` 直指字体文件可以完全绕开 fontconfig。
 
-## 说明
+### 说明
 
 - ColaMD 的自定义主题是**独占**的：它取代内置主题而不是叠加，所以本文件定义了整套 CSS 变量，而不是只覆盖几个点。想在内置主题上叠加单条规则（比如只要那行红标题）做不到。
 - 自定义主题的内容是原样注入一个 `<style>`，因此除变量外可以写任意 CSS。
 - 主题切换时 body 上的 class 会被重置，要长期生效的样式请注入 `<style>` 或写进主题文件，别依赖注入的 class。
 - 选中自定义主题时，body 上**只有** `theme-custom` 这一个 class（内置的 `theme-*` 全被移除）。内置主题里那些 `body.theme-x .cm-content .cm-md-*` 的写法因此不会生效——行内代码的颜色就属于这一类，需要在主题文件里自己补。
+
+## launcher 与注入
+
+### 渲染层注入（`colamd-render-inject.mjs`）
+
+一个脚本管四件事，因为**一个 page target 只接受一个 debugger 客户端**，拆成多个脚本会互抢 CDP 连接。
+
+| 注入 | 做法 |
+|---|---|
+| 代码块里按 Tab 插缩进 | capture 阶段拦 keydown：命中 `#editor`/`#source-editor` 且不在 `li`/`td`/`th` 里时插真 `\t`（`execCommand`），焦点不动。ColaMD 原生 Tab 会把焦点移出编辑器 |
+| 上游装饰排序 bug 的补丁 | 包一层 `Array.prototype.sort`，只对形如 `{from,to,deco}` 的数组补 `startSide` 排序键，其它调用透传。**上游修好后删掉这段**（见下） |
+| `+` 右侧「打开文件」按钮 | 克隆 `.tab-new-btn` 复用样式与 28px 尺寸，插在它后面；点击走 `electronAPI.openFile()`（主进程弹原生文件对话框）。React 重渲染会冲掉它，挂了 `MutationObserver` 幂等重插 |
+| 显出汉堡菜单按钮 | `#app-menu-btn` 是 App 自带的，上游只在 Windows 上 `removeAttribute("hidden")`；本仓库的主进程注入收了原生菜单栏，所以这里把 `hidden` 摘掉。点击处理是 App 自带的 `popupAppMenu` → `Menu.popup()` |
+
+判据：
+
+```sh
+node ~/.local/bin/colamd-cdp.mjs 'JSON.stringify([...document.querySelectorAll("#titlebar > button")].map(b=>b.id||b.className))'
+# 期望含 app-menu-btn / tab-new-btn / colamd-open-btn
+```
+
+### 上游 bug：装饰排序断言（文档打开后停在欢迎页）
+
+| 项 | 内容 |
+|---|---|
+| 现象 | 打开某些 md，标签建得出但正文停在 `Welcome to ColaMD`；控制台报 `Ranges must be added sorted by 'from' position and 'startSide'` |
+| 原因 | `src/renderer/editor/live-preview.ts` 的 `buildDecorations()` 只按 `(from, to)` 排装饰，而 `RangeSetBuilder` 还要求同一 `from` 的装饰按 `startSide` 排（行装饰 `-2e8`、内联 mark `-1`、widget `0`）。同起点撞上即抛错，那次写入文档内容的事务被整体丢掉 |
+| 触发 | 内容相关，与主题/字体/配置无关（换内置主题、关掉全部注入照样复现）。含表格、任务项、引用块内嵌代码块、`==高亮==` 的文档会踩到 |
+| 上游 | [marswaveai/ColaMD#157](https://github.com/marswaveai/ColaMD/issues/157)（复现 + 出错栈 + 一行修法） |
+| 撤除 | 上游修好 comparator 后，删掉 `colamd-render-inject.mjs` 里 `patchDecorationSort` 那段与返回值拼接，wrapper 不动 |
+
+### 主进程注入（`colamd-main-inject.mjs`）
+
+Linux 上 ColaMD 会把 Electron 的原生菜单栏（`File / Edit / View / Theme / Help`）显示在窗口最上面，**它的颜色改不动**：那条栏由主进程绘制、不在网页里，任何 CSS 都够不着——`nativeTheme.themeSource = "light"`、`GTK_THEME=Adwaita:light` 启动之类的路子实测都无效。压在暖米色纸面上，它就是一条黑边。
+
+所以本仓库只改它的「显 / 隐」：脚本连上主进程的 Node inspector（`--inspect=9229`，只监听 `127.0.0.1`），调 `win.setAutoHideMenuBar(true)` + `win.setMenuBarVisibility(false)`；菜单项没被删，`Alt` 仍能唤出，日常入口是顶栏那个汉堡按钮。
+
+脚本按 30ms 重试求值，直到 App 的 bundle 加载完为止——更早时默认执行上下文还是 Electron 自己的 bootstrap，`process.mainModule` 尚未建立。实测补丁落在**窗口创建之前**（日志里 `windows:0`），启动时菜单栏一次都不会闪。另挂了 `browser-window-created` 与 `Menu.setApplicationMenu` 两个钩子——切换主题会重建菜单，不挂后者菜单栏会自己冒回来。
+
+### 查询工具
+
+```sh
+node ~/.local/bin/colamd-cdp.mjs  '<js 表达式>'   # 渲染层（CDP 9222）
+node ~/.local/bin/colamd-main.mjs '<js 表达式>'   # 主进程（inspector 9229）
+node ~/.local/bin/colamd-fonts.mjs '#editor .cm-content'   # 该节点真正加载的字体文件
+```
+
+## 已知坑
+
+- **App 自更新后自行重启会绕过 wrapper** → 全部注入失效。从桌面图标重开一次即恢复。
+- 关闭最后一个标签会让 App 直接退出（上游行为）。
+- 用 `kill` / `pkill` 结束 App，会在 coredump 里留一条 SIGTRAP（不是崩溃；走窗口关闭流程则没有）。
+- `~/.local/bin/colamd*` 是符号链接：`cp` / `>` 写这些路径会**写穿到本仓库文件**。要换一份 wrapper，先 `rm` 掉链接。

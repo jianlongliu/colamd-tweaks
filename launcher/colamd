@@ -1,0 +1,26 @@
+#!/usr/bin/env sh
+# ColaMD launcher wrapper: Wayland IME plus the user-level patches the AppImage
+# cannot carry. Both injections run in the background; if either fails the app
+# still starts.
+#   renderer (CDP 9222)         : Tab inserts an indent; decorations re-sorted
+#   main process (inspect 9229) : the native menu bar starts hidden, Alt reveals it
+# Lives in ~/Projects/colamd-tweaks; ~/.local/bin/colamd is a symlink to it.
+RENDER_INJECT="$HOME/.local/bin/colamd-render-inject.mjs"
+MAIN_INJECT="$HOME/.local/bin/colamd-main-inject.mjs"
+NODE=""
+for c in "$HOME/.local/share/mise/shims/node" \
+         "$HOME/.local/share/mise/installs/node/26.7.0/bin/node" \
+         node; do
+  if command -v "$c" >/dev/null 2>&1; then NODE="$c"; break; fi
+done
+if [ -n "$NODE" ]; then
+  if [ -f "$RENDER_INJECT" ]; then
+    ( sleep 2; "$NODE" "$RENDER_INJECT" >>/tmp/colamd-render-inject.log 2>&1 ) &
+  fi
+  if [ -f "$MAIN_INJECT" ]; then
+    # No sleep: the main process inspector is up before the window exists, and the
+    # patch only skips the menu-bar flash if it lands before the window is created.
+    ( "$NODE" "$MAIN_INJECT" >>/tmp/colamd-main-inject.log 2>&1 ) &
+  fi
+fi
+exec "$HOME/.local/bin/colamd.AppImage" --enable-wayland-ime --remote-debugging-port=9222 --inspect=9229 "$@"
