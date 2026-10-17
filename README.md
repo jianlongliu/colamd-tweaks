@@ -14,25 +14,27 @@ App 的代码在只读打包里（AppImage，或发行版包里的 `app.asar`）
 | # | 定制 | 效果 | 落点 |
 |---|---|---|---|
 | 1 | 主题 `Claude.css` | 暖米纸面 + 陶土橙；顶栏/标签栏配色；h1 固定红；代码块等宽字体；语法高亮换暖色板；单标签时收起整条标签栏 | `~/.colamd/themes/Claude.css` |
-| 2 | 启动器 `launcher/colamd` | 加 `--enable-wayland-ime`；开渲染层 CDP（9222）与主进程 inspector（9229）；启动后在后台跑两个注入 | `~/.local/bin/colamd`（符号链接） |
-| 3 | 渲染层注入 `launcher/colamd-render-inject.mjs` | 代码块里按 Tab 插真缩进；上游装饰排序 bug 的临时补丁；`+` 右侧加「打开文件」按钮；显出 App 自带的汉堡菜单按钮 | 同上 |
-| 4 | 主进程注入 `launcher/colamd-main-inject.mjs` | 原生菜单栏启动默认隐藏（`Alt` 仍能唤出） | 同上 |
-| 5 | 查询工具 `launcher/colamd-{cdp,main,fonts}.mjs` | 在渲染层/主进程里执行任意 JS 表达式；查节点真正加载的字体文件 | 同上 |
+| 2 | 启动器 `launcher/colamd` | 加 `--enable-wayland-ime`；开渲染层 CDP（9222）与主进程 inspector（9229）；挂上窗口装饰补丁；启动后在后台跑两个注入 | `~/.local/bin/colamd`（符号链接） |
+| 3 | 窗口装饰补丁 `launcher/colamd-frame-patch.cjs` | 去掉 Wayland 上那条 37px 的原生标题栏（`ColaMD ✕`）；顺带原生菜单栏不再占行，菜单入口改由顶栏汉堡按钮承担 | 同上（经 `NODE_OPTIONS` 预加载） |
+| 4 | 渲染层注入 `launcher/colamd-render-inject.mjs` | 代码块里按 Tab 插真缩进；上游装饰排序 bug 的临时补丁；`+` 右侧加「打开文件」按钮；显出 App 自带的汉堡菜单按钮 | 同上 |
+| 5 | 主进程注入 `launcher/colamd-main-inject.mjs` | 原生菜单栏启动默认隐藏（`Alt` 仍能唤出） | 同上 |
+| 6 | 查询工具 `launcher/colamd-{cdp,main,fonts}.mjs` | 在渲染层/主进程里执行任意 JS 表达式；查节点真正加载的字体文件 | 同上 |
 
 AppImage 本体不在本仓库（`~/.local/bin/colamd.AppImage`，由 App 自带 updater 维护）。
 
 ## 目录
 
 ```
-Claude.css                    主题本体（纯 CSS）
-launcher/                     本机自用
-├── colamd                    启动器 wrapper（desktop 的 Exec 指向它）
-├── colamd-render-inject.mjs  渲染层注入：Tab 缩进 / 装饰补丁 / 顶栏两个按钮
-├── colamd-main-inject.mjs    主进程注入：隐藏原生菜单栏
-├── colamd-cdp.mjs            渲染层执行 JS
-├── colamd-main.mjs           主进程执行 JS
-└── colamd-fonts.mjs          查真正加载的字体
-assets/                       预览图与截图
+Claude.css                     主题本体（纯 CSS）
+launcher/                      本机自用
+├── colamd                     启动器 wrapper（desktop 的 Exec 指向它）
+├── colamd-frame-patch.cjs     窗口装饰补丁：去掉 Wayland 上的原生标题栏
+├── colamd-render-inject.mjs   渲染层注入：Tab 缩进 / 装饰补丁 / 顶栏两个按钮
+├── colamd-main-inject.mjs     主进程注入：隐藏原生菜单栏
+├── colamd-cdp.mjs             渲染层执行 JS
+├── colamd-main.mjs            主进程执行 JS
+└── colamd-fonts.mjs           查真正加载的字体
+assets/                        预览图与截图
 ```
 
 ## 安装
@@ -55,7 +57,7 @@ cp Claude.css ~/.colamd/themes/
 `~/.local/bin/` 里只放符号链接，脚本本体在本仓库：
 
 ```sh
-for f in colamd colamd-render-inject.mjs colamd-main-inject.mjs colamd-cdp.mjs colamd-main.mjs colamd-fonts.mjs; do
+for f in colamd colamd-frame-patch.cjs colamd-render-inject.mjs colamd-main-inject.mjs colamd-cdp.mjs colamd-main.mjs colamd-fonts.mjs; do
   ln -sf "$HOME/Projects/colamd-tweaks/launcher/$f" "$HOME/.local/bin/$f"
 done
 ```
@@ -186,11 +188,49 @@ node ~/.local/bin/colamd-cdp.mjs 'JSON.stringify([...document.querySelectorAll("
 | 上游 | [marswaveai/ColaMD#157](https://github.com/marswaveai/ColaMD/issues/157)（复现 + 出错栈 + 一行修法） |
 | 撤除 | 上游修好 comparator 后，删掉 `colamd-render-inject.mjs` 里 `patchDecorationSort` 那段与返回值拼接，wrapper 不动 |
 
+### 窗口装饰补丁（`colamd-frame-patch.cjs`）
+
+Wayland 会话里，ColaMD 的窗口顶上多一条 `ColaMD ✕` 原生标题栏，压在暖米色纸面上就是一条异色带。量法（不靠肉眼）：`BrowserWindow.getBounds().height - getContentBounds().height`，菜单栏已由主进程注入收起的实例上为 **37px**；App 自己的 `#titlebar`（36px）在网页里，不计入这个差值。
+
+来源是 App 的建窗参数：
+
+```js
+titleBarStyle: isWindows ? "hidden" : "hiddenInset"
+```
+
+`hiddenInset` 是 macOS 的值，Linux 上不受支持，Chromium 于是退回一条真的装饰。把该值换成 `hidden` 即可（本机实测：37px → 0，页内 `#titlebar` 的 `-webkit-app-region: drag` 不受影响，窗口照常拖动）。
+
+三条实现约束：
+
+- **只能在窗口创建前改**。一个已存在窗口的 `titleBarStyle` 改不了。
+- **没法从 inspector 打补丁**。electron 模块的 `BrowserWindow` 是**不可配置的访问器**（`{configurable:false, get:fn}`，实测），`defineProperty` 与直接赋值都替换不掉——所以不是"连上主进程改一改"，而是**预加载**：脚本在 app bundle 加载前拦截 `Module._load`，返回一个 `BrowserWindow` 被 Proxy 包装过的 electron 模块。
+- **`NODE_OPTIONS` 要真的送得到 Electron**。这里有个坑：发行版包的入口 `/usr/bin/colamd` 会 exec `/usr/bin/electron44`，而那个脚本 `export ELECTRON_FORCE_IS_PACKAGED=true`；Electron 在这种模式下属实**忽略 `NODE_OPTIONS`**，补丁一次都不会加载（日志里连那行都没有）。所以 wrapper 直接调 `/usr/lib/electron44/electron --app /usr/lib/colamd/app.asar`，并复刻 `/usr/bin/colamd` 自己做的那两件事：`CHROME_DESKTOP=colamd.desktop`（Wayland 的 app id 靠它）、root 时加 `--no-sandbox`。
+
+  判据——起一个隔离实例，看它有没有打印补丁那行（用空闲端口，别撞到在跑的 App）：
+
+  ```sh
+  NODE_OPTIONS="--require $HOME/.local/bin/colamd-frame-patch.cjs" \
+    /usr/lib/electron44/electron --app /usr/lib/colamd/app.asar \
+    --user-data-dir=/tmp/probe-fp --remote-debugging-port=9721 2>&1 | grep -m1 frame-patch
+  # 期望：colamd-frame-patch: titleBarStyle hiddenInset -> hidden
+  # 把 --app 那行的二进制换成 /usr/bin/electron44，这一行就不再出现。
+  ```
+
+  注意如实测：把该变量赋成字符串 `false` **不解**——Electron 看的是变量在不在，不是它的值。
+
+只有 `titleBarStyle === "hiddenInset"` 会被改写，其它取值原样放行。
+
+AppImage 分支没实测过（本机没装 AppImage）：它自带 electron 二进制、不经 `/usr/bin/electron44` 那层，所以 `NODE_OPTIONS` 应当照常生效——**这是推测**，换到 AppImage 上要按上面的判据重跑一次。
+
+**副作用**：原生菜单栏那一行整体不再存在，`setMenuBarVisibility(true)` 也唤不回（实测），所以 `Alt` 不再是菜单入口；菜单项本身没丢，顶栏的汉堡按钮仍能弹出完整的 `File / Edit / View / Theme / Help`（实测 `Menu.popup` 收到的就是这五项）。窗口关闭改走合成器（niri：`Mod+Q`）。
+
 ### 主进程注入（`colamd-main-inject.mjs`）
 
 Linux 上 ColaMD 会把 Electron 的原生菜单栏（`File / Edit / View / Theme / Help`）显示在窗口最上面，**它的颜色改不动**：那条栏由主进程绘制、不在网页里，任何 CSS 都够不着——`nativeTheme.themeSource = "light"`、`GTK_THEME=Adwaita:light` 启动之类的路子实测都无效。压在暖米色纸面上，它就是一条黑边。
 
 所以本仓库只改它的「显 / 隐」：脚本连上主进程的 Node inspector（`--inspect=9229`，只监听 `127.0.0.1`），调 `win.setAutoHideMenuBar(true)` + `win.setMenuBarVisibility(false)`；菜单项没被删，`Alt` 仍能唤出，日常入口是顶栏那个汉堡按钮。
+
+这条与上面的窗口装饰补丁是**互补**的：装饰补丁生效时菜单栏那一行根本不存在，本脚本无事可做；它覆盖的是补丁缺席（例如 `NODE_OPTIONS` 被清掉）的场合。两者都不动 App 的菜单结构。
 
 脚本按 30ms 重试求值，直到 App 的 bundle 加载完为止——更早时默认执行上下文还是 Electron 自己的 bootstrap，`process.mainModule` 尚未建立。实测补丁落在**窗口创建之前**（日志里 `windows:0`），启动时菜单栏一次都不会闪。另挂了 `browser-window-created` 与 `Menu.setApplicationMenu` 两个钩子——切换主题会重建菜单，不挂后者菜单栏会自己冒回来。
 

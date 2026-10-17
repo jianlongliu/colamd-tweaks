@@ -1,24 +1,49 @@
 #!/usr/bin/env sh
 # ColaMD launcher wrapper: Wayland IME plus the user-level patches the packaged
-# app cannot carry. Both injections run in the background; if either fails the
-# app still starts.
-#   renderer (CDP 9222)         : Tab inserts an indent; decorations re-sorted
-#   main process (inspect 9229) : the native menu bar starts hidden, Alt reveals it
+# app cannot carry. The injections run in the background; if either fails the app
+# still starts.
+#   frame patch (NODE_OPTIONS)   : no native title-bar strip; the app's own chrome is the top row
+#   renderer (CDP 9222)          : Tab inserts an indent; decorations re-sorted
+#   main process (inspect 9229)  : the native menu bar starts hidden, Alt reveals it
 # Lives in ~/Projects/colamd-tweaks; ~/.local/bin/colamd is a symlink to it.
 RENDER_INJECT="$HOME/.local/bin/colamd-render-inject.mjs"
 MAIN_INJECT="$HOME/.local/bin/colamd-main-inject.mjs"
+# Must be in place BEFORE the app bundle loads: it wraps the BrowserWindow
+# constructor so the window is created without the Wayland decoration strip.
+# A running window cannot be changed afterwards. See colamd-frame-patch.cjs.
+FRAME_PATCH="$HOME/.local/bin/colamd-frame-patch.cjs"
+if [ -f "$FRAME_PATCH" ]; then
+  NODE_OPTIONS="--require $FRAME_PATCH${NODE_OPTIONS:+ $NODE_OPTIONS}"
+  export NODE_OPTIONS
+fi
 # Which ColaMD to launch. The AppImage is the portable form and wins if present;
 # on machines where the distro package is installed instead (Arch: colamd-bin),
-# /usr/bin/colamd is the entry point. Export COLAMD_APP to override either.
+# the packaged app.asar under /usr/lib/colamd is the entry point. Export
+# COLAMD_APP to override either.
+#
+# Distro case calls the electron binary directly instead of /usr/bin/colamd:
+# that script execs /usr/bin/electron44, which exports
+# ELECTRON_FORCE_IS_PACKAGED=true — and in that mode Electron ignores
+# NODE_OPTIONS, so the frame patch above would never load. Verified with
+# otherwise identical arguments: patch log present without the variable, absent
+# with it (and assigning it the string "false" is not enough — Electron tests
+# the variable's presence, not its value). Everything /usr/bin/colamd wraps
+# around the call is reproduced: CHROME_DESKTOP names the desktop entry (the
+# Wayland app id), LD_LIBRARY_PATH points at /usr/lib/colamd/lib which the
+# distro package does not ship, and --no-sandbox is added only under root.
 APP="${COLAMD_APP:-}"
+# Extra arguments for "$APP": empty for the AppImage, "--app <asar>" for the
+# distro case. Deliberately word-split at the exec below (POSIX sh has no
+# arrays); both are space-free paths, so the split is exact.
+APP_ARGS=""
 if [ -z "$APP" ]; then
   if [ -x "$HOME/.local/bin/colamd.AppImage" ]; then
     APP="$HOME/.local/bin/colamd.AppImage"
   else
-    # Distro package (Arch: colamd-bin installs /usr/bin/colamd).
-    # Do NOT use `command -v colamd`: this wrapper IS ~/.local/bin/colamd, so it
-    # would resolve to itself and exec in a loop.
-    APP="/usr/bin/colamd"
+    APP="/usr/lib/electron44/electron"
+    APP_ARGS="--app /usr/lib/colamd/app.asar"
+    CHROME_DESKTOP="colamd.desktop"
+    export CHROME_DESKTOP
   fi
 fi
 NODE=""
@@ -44,4 +69,13 @@ if [ -n "$NODE" ]; then
     ( "$NODE" "$MAIN_INJECT" "$APP_PID" >>/tmp/colamd-main-inject.log 2>&1 ) &
   fi
 fi
-exec "$APP" --enable-wayland-ime --remote-debugging-port=9222 --inspect=9229 "$@"
+# /usr/bin/colamd exports CHROME_DESKTOP, sets LD_LIBRARY_PATH to
+# /usr/lib/colamd/lib (that directory does not exist on this install, so there is
+# nothing to point at), and adds --no-sandbox only when running as root. Only the
+# first applies here; the root case is reproduced below.
+SANDBOX_ARG=""
+if [ "$(id -u)" -eq 0 ] && [ "${ELECTRON_RUN_AS_NODE:-}" != "1" ]; then
+  SANDBOX_ARG="--no-sandbox"
+fi
+# shellcheck disable=SC2086  # APP_ARGS is meant to split: see its definition above.
+exec "$APP" $SANDBOX_ARG $APP_ARGS --enable-wayland-ime --remote-debugging-port=9222 --inspect=9229 "$@"
