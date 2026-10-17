@@ -2,7 +2,11 @@
 // starts the app with --remote-debugging-port=9222).
 //
 // One script owns this connection on purpose: the DevTools protocol hands a page
-// target to a single debugger client, so two scripts would race for it.
+// target to a single debugger client, so two scripts would race for it. It also
+// stays resident: ColaMD opens one window per document plus a "Untitled" one, so
+// patching only the first target leaves the window the user is actually reading
+// unpatched. This script therefore attaches to every page target as it appears
+// and re-attaches if a target goes away (reload, new window).
 //
 // 1. Tab inside a code block inserts a real tab instead of moving focus.
 // 2. Temporary workaround for an upstream bug in buildDecorations() — it sorts
@@ -105,30 +109,109 @@ const list = async () => {
   }
 };
 
-let page = null;
-for (let i = 0; i < 60 && !page; i++) {
-  page = (await list()).find(t => t.type === "page" && /renderer\/index/.test(t.url));
-  if (!page) await new Promise(r => setTimeout(r, 500));
+// Every window ColaMD opens is its own page target, and the app opens one per
+// document (plus a blank one), so a single shot at the first target is not
+// enough. Attach to all of them, keep polling for ones that show up later, and
+// re-run INJECT on every tick: it is idempotent (each step reports "already" /
+// "present"), which covers the two timing traps below.
+//
+//   - A target can exist before #titlebar does, in which case the open-file
+//     button finds no anchor and would never be retried.
+//   - A page reload hands us a fresh document whose window globals are gone.
+//
+// The decoration-sort patch only has to be in place before the first document
+// transaction, which is the earliest tick after the target appears.
+const attached = new Map(); // target id -> { ws, inject }
+
+const connect = async (target) => {
+  const key = target.id ?? target.webSocketDebuggerUrl;
+  if (attached.has(key)) return;
+  attached.set(key, null); // reserve before the await so the poll cannot double-attach
+
+  const ws = new WebSocket(target.webSocketDebuggerUrl);
+  let seq = 0;
+  const pending = new Map();
+  const send = (method, params = {}) => new Promise(res => {
+    const id = ++seq;
+    pending.set(id, res);
+    ws.send(JSON.stringify({ id, method, params }));
+  });
+  ws.onmessage = (e) => {
+    const m = JSON.parse(e.data);
+    if (m.id && pending.has(m.id)) { pending.get(m.id)(m.result ?? m.error); pending.delete(m.id); }
+  };
+
+  // The handshake can fail outright (target vanished between list() and connect),
+  // and a reserved-but-never-connected key would block every later attempt.
+  const closed = new Promise((_, rej) => {
+    ws.onerror = () => rej(new Error("websocket error"));
+    ws.onclose = () => { attached.delete(key); rej(new Error("websocket closed")); };
+  });
+  try {
+    await Promise.race([new Promise(r => ws.onopen = r), closed]);
+  } catch (e) {
+    attached.delete(key);
+    ws.close();
+    throw e;
+  }
+  // Connected: swap the handshake handlers for ones that just free the slot,
+  // so a later close (window closed, or reload) lets the next tick re-attach.
+  ws.onerror = () => {};
+  ws.onclose = () => attached.delete(key);
+  attached.set(key, { ws, send });
+};
+
+const injectInto = async (entry, target) => {
+  const res = await entry.send("Runtime.evaluate", { expression: INJECT, returnByValue: true });
+  return { value: res?.result?.value ?? res, title: target.title ?? target.id };
+};
+
+const isPage = t => t.type === "page" && /renderer\/index/.test(t.url);
+
+const tick = async (report) => {
+  const pages = (await list()).filter(isPage);
+  for (const t of pages) {
+    try {
+      await connect(t);
+      const entry = attached.get(t.id ?? t.webSocketDebuggerUrl);
+      if (!entry) continue;
+      const { value, title } = await injectInto(entry, t);
+      if (report) console.log(`render-inject: ${title}:`, JSON.stringify(value));
+    } catch {}
+  }
+  return pages.length;
+};
+
+// First target has to appear before anything can be injected; give it a while.
+let ok = false;
+for (let i = 0; i < 60 && !ok; i++) {
+  ok = (await tick(true)) > 0;
+  if (!ok) await new Promise(r => setTimeout(r, 500));
 }
-if (!page) {
+if (!ok) {
   console.error("render-inject: no page target found");
   process.exit(1);
 }
 
-const ws = new WebSocket(page.webSocketDebuggerUrl);
-let seq = 0;
-const pending = new Map();
-const send = (method, params = {}) => new Promise(res => {
-  const id = ++seq;
-  pending.set(id, res);
-  ws.send(JSON.stringify({ id, method, params }));
-});
-ws.onmessage = (e) => {
-  const m = JSON.parse(e.data);
-  if (m.id && pending.has(m.id)) { pending.get(m.id)(m.result ?? m.error); pending.delete(m.id); }
+// Keep watching: new documents open new windows (= new page targets) at any time,
+// a reload swaps the target out from under the websocket, and a target can exist
+// before #titlebar does. Re-running the (idempotent) patch on every tick covers
+// all three.
+//
+// Lifetime: the wrapper passes the app's PID, and we exit with it. The port going
+// quiet is only a fallback — if the app is already running when a second wrapper
+// starts us, we would attach to *that* app's port and the quiet test would never
+// fire, leaving this process behind forever.
+const appPid = Number(process.argv[2]) || 0;
+const appAlive = () => {
+  if (!appPid) return true;
+  try { process.kill(appPid, 0); return true; } catch { return false; }
 };
-ws.onerror = () => process.exit(1);
-await new Promise(r => ws.onopen = r);
-const res = await send("Runtime.evaluate", { expression: INJECT, returnByValue: true });
-console.log("render-inject:", JSON.stringify(res?.result?.value ?? res));
-ws.close();
+
+let idle = 0;
+setInterval(async () => {
+  if (!appAlive()) process.exit(0);
+  const count = await tick(false);
+  if (count === 0 && ++idle >= 30) process.exit(0);
+  if (count > 0) idle = 0;
+}, 1000);

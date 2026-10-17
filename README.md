@@ -3,13 +3,13 @@
 给 [ColaMD](https://colamd.app)（Electron + CodeMirror 的 Markdown 阅读/编辑器）的本机定制合集：一套 Claude 风格的主题 + 一组启动器/注入脚本。
 
 - **主题**（`Claude.css`）——谁都能用，拷进 `~/.colamd/themes/` 即可。
-- **launcher / 注入**（`launcher/`）——**只对本机有意义**：路径写死成 `$HOME/.local/bin/…`、假定从 AppImage 启动、依赖本机装的字体文件。clone 的人忽略这个目录就好。
+- **launcher / 注入**（`launcher/`）——**只对本机有意义**：路径写死成 `$HOME/.local/bin/…`、依赖本机装的字体文件。clone 的人忽略这个目录就好。
 
 ![预览](assets/preview.jpg)
 
 ## 本机对 ColaMD 做了什么
 
-AppImage 是只读打包，改不了里面的代码，所以除了主题（数据）之外的一切都靠"启动时从外部注入"实现。
+App 的代码在只读打包里（AppImage，或发行版包里的 `app.asar`），改不动，所以除了主题（数据）之外的一切都靠"启动时从外部注入"实现。
 
 | # | 定制 | 效果 | 落点 |
 |---|---|---|---|
@@ -60,7 +60,9 @@ for f in colamd colamd-render-inject.mjs colamd-main-inject.mjs colamd-cdp.mjs c
 done
 ```
 
-desktop 条目的 `Exec` 指向 `~/.local/bin/colamd`。启动链：wrapper 开两个调试端口 → 后台跑 `colamd-render-inject.mjs`（连 CDP 9222）与 `colamd-main-inject.mjs`（连 inspector 9229）→ 再 `exec` AppImage。两个注入都是独立进程，连不上就自己退出，**不影响 App 启动**；日志分别在 `/tmp/colamd-render-inject.log`、`/tmp/colamd-main-inject.log`。
+desktop 条目的 `Exec` 指向 `~/.local/bin/colamd`。wrapper 自己挑要启动的 ColaMD：`~/.local/bin/colamd.AppImage` 存在就用它，否则用发行版包（`/usr/bin/colamd`）；`COLAMD_APP` 可覆盖。启动链：wrapper 开两个调试端口 → 后台跑 `colamd-render-inject.mjs`（连 CDP 9222）与 `colamd-main-inject.mjs`（连 inspector 9229）→ 再 `exec` App。两个注入都是独立进程，连不上就自己退出，**不影响 App 启动**；日志分别在 `/tmp/colamd-render-inject.log`、`/tmp/colamd-main-inject.log`。
+
+注入进程与 App 同生共死：wrapper 把 App 的 PID 传给渲染层注入，App 一退它就退出。没有这条，App already running 时再点一次图标（会起第二个 wrapper）留下的注入进程会挂到在跑那个 App 的端口上、一直不退。
 
 ## 主题细节
 
@@ -133,16 +135,19 @@ ColaMD 2.7 起编辑器内核从 Milkdown 换成 CodeMirror，行类名的写法
 
 ### 代码块字体：需要按环境改
 
-文件末尾的两段 `@font-face` 指向本机字体的**绝对路径**，在你机器上多半不存在，请改成自己的或用不到的整段删掉：
+代码块用 `Google Sans Code`，**按族名**写在 `font-family` 里，字体得你自己装（本机在 `~/.local/share/fonts/GoogleSansCode/`）。没装不会报错，只是静默回退到 `monospace`。
 
 ```css
-@font-face { font-family: "ColaMD Code";    src: url("file:///usr/share/fonts/TTF/JetBrainsMonoNerdFont-Regular.ttf"); }
-@font-face { font-family: "ColaMD Code CN"; src: url("file:///usr/share/fonts/maple/MapleMonoNormalNL-NF-CN-Medium.ttf"); }
+#editor .cm-content .cm-md-codeblock,
+#editor .cm-content .cm-md-codeblock *,
+#editor .cm-content .cm-md-inlinecode {
+  font-family: "Google Sans Code", monospace !important;
+}
 ```
 
-`ColaMD Code` 管西文与符号、`ColaMD Code CN` 管中文，按 fallback 顺序写在同一行 `font-family` 里。路径错了不会报错，只是静默回退到 `monospace`。
+**别用 `@font-face` + `file://` 指字体文件**：那条路会让渲染器每次应用主题都解析整份字体。本主题一度把 13MB 的中文 PingFang 这样挂上，实测应用一次要 1.0–2.6s CPU，改成系统族名后降到 0.19–0.27s（同一进程内切主题，3 轮对调顺序复现）。按族名走 fontconfig 就没有这个开销。
 
-**为什么绕这一圈**：在部分 Linux 上，按族名写 `'JetBrains Mono'` 之类会被 fontconfig 规则劫持，实际渲染成另一个字体（可用 `fc-match "JetBrains Mono"` 核对——返回的不是 JetBrains 即中招）。`@font-face` + `file://` 直指字体文件可以完全绕开 fontconfig。
+按族名的代价：在部分 Linux 上 `fc-match` 可能把族名解析成别的字体，核对一下返回值即可。另外 `Google Sans Code` **不含汉字**，代码块里的中文由系统 fallback 链决定，要单独指定中文得另加一节 `font-family`。
 
 ### 说明
 

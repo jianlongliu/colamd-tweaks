@@ -1,26 +1,47 @@
 #!/usr/bin/env sh
-# ColaMD launcher wrapper: Wayland IME plus the user-level patches the AppImage
-# cannot carry. Both injections run in the background; if either fails the app
-# still starts.
+# ColaMD launcher wrapper: Wayland IME plus the user-level patches the packaged
+# app cannot carry. Both injections run in the background; if either fails the
+# app still starts.
 #   renderer (CDP 9222)         : Tab inserts an indent; decorations re-sorted
 #   main process (inspect 9229) : the native menu bar starts hidden, Alt reveals it
 # Lives in ~/Projects/colamd-tweaks; ~/.local/bin/colamd is a symlink to it.
 RENDER_INJECT="$HOME/.local/bin/colamd-render-inject.mjs"
 MAIN_INJECT="$HOME/.local/bin/colamd-main-inject.mjs"
+# Which ColaMD to launch. The AppImage is the portable form and wins if present;
+# on machines where the distro package is installed instead (Arch: colamd-bin),
+# /usr/bin/colamd is the entry point. Export COLAMD_APP to override either.
+APP="${COLAMD_APP:-}"
+if [ -z "$APP" ]; then
+  if [ -x "$HOME/.local/bin/colamd.AppImage" ]; then
+    APP="$HOME/.local/bin/colamd.AppImage"
+  else
+    # Distro package (Arch: colamd-bin installs /usr/bin/colamd).
+    # Do NOT use `command -v colamd`: this wrapper IS ~/.local/bin/colamd, so it
+    # would resolve to itself and exec in a loop.
+    APP="/usr/bin/colamd"
+  fi
+fi
 NODE=""
 for c in "$HOME/.local/share/mise/shims/node" \
          "$HOME/.local/share/mise/installs/node/26.7.0/bin/node" \
          node; do
   if command -v "$c" >/dev/null 2>&1; then NODE="$c"; break; fi
 done
+# This shell execs into the app below, so the PID stays valid for the app's life.
+# The injectors take it and exit when it disappears: launching a second time while
+# the app is already open (clicking the icon twice) makes a second wrapper, and
+# without this its renderer injector would attach to the first app's CDP port and
+# linger there for as long as that app lives.
+APP_PID=$$
 if [ -n "$NODE" ]; then
   if [ -f "$RENDER_INJECT" ]; then
-    ( sleep 2; "$NODE" "$RENDER_INJECT" >>/tmp/colamd-render-inject.log 2>&1 ) &
+    # The renderer port needs the window to exist before it is any use.
+    ( sleep 2; "$NODE" "$RENDER_INJECT" "$APP_PID" >>/tmp/colamd-render-inject.log 2>&1 ) &
   fi
   if [ -f "$MAIN_INJECT" ]; then
-    # No sleep: the main process inspector is up before the window exists, and the
-    # patch only skips the menu-bar flash if it lands before the window is created.
-    ( "$NODE" "$MAIN_INJECT" >>/tmp/colamd-main-inject.log 2>&1 ) &
+    # No sleep: the main-process inspector is up before the window exists, and
+    # patching early is what keeps the menu bar from flashing at startup.
+    ( "$NODE" "$MAIN_INJECT" "$APP_PID" >>/tmp/colamd-main-inject.log 2>&1 ) &
   fi
 fi
-exec "$HOME/.local/bin/colamd.AppImage" --enable-wayland-ime --remote-debugging-port=9222 --inspect=9229 "$@"
+exec "$APP" --enable-wayland-ime --remote-debugging-port=9222 --inspect=9229 "$@"
