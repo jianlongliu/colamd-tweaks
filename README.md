@@ -1,11 +1,11 @@
 # colamd-tweaks
 
+![预览](assets/preview.jpg)
+
 给 [ColaMD](https://colamd.app)（Electron + CodeMirror 的 Markdown 阅读/编辑器）的本机定制合集：一套 Claude 风格的主题 + 一组启动器/注入脚本。
 
 - **主题**（`Claude.css`）——谁都能用，拷进 `~/.colamd/themes/` 即可。
 - **launcher / 注入**（`launcher/`）——**只对本机有意义**：路径写死成 `$HOME/.local/bin/…`、依赖本机装的字体文件。clone 的人忽略这个目录就好。
-
-![预览](assets/preview.jpg)
 
 ## 本机对 ColaMD 做了什么
 
