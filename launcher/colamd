@@ -2,7 +2,7 @@
 # ColaMD launcher wrapper: Wayland IME plus the user-level patches the packaged
 # app cannot carry. The injections run in the background; if either fails the app
 # still starts.
-#   frame patch (NODE_OPTIONS)   : no native title-bar strip; the app's own chrome is the top row
+#   frame patch (NODE_OPTIONS / --require) : no native title-bar strip; the app's own chrome is the top row
 #   renderer (CDP 9222)          : Tab inserts an indent; decorations re-sorted
 #   main process (inspect 9229)  : the native menu bar starts hidden, Alt reveals it
 # Lives in ~/Projects/colamd-tweaks; ~/.local/bin/colamd is a symlink to it.
@@ -11,40 +11,58 @@ MAIN_INJECT="$HOME/.local/bin/colamd-main-inject.mjs"
 # Must be in place BEFORE the app bundle loads: it wraps the BrowserWindow
 # constructor so the window is created without the Wayland decoration strip.
 # A running window cannot be changed afterwards. See colamd-frame-patch.cjs.
+# AppImage / COLAMD_APP: loaded through NODE_OPTIONS below. Distro: through
+# --require, because Electron ignores NODE_OPTIONS in packaged mode.
 FRAME_PATCH="$HOME/.local/bin/colamd-frame-patch.cjs"
-if [ -f "$FRAME_PATCH" ]; then
-  NODE_OPTIONS="--require $FRAME_PATCH${NODE_OPTIONS:+ $NODE_OPTIONS}"
-  export NODE_OPTIONS
-fi
 # Which ColaMD to launch. The AppImage is the portable form and wins if present;
 # on machines where the distro package is installed instead (Arch: colamd-bin),
 # the packaged app.asar under /usr/lib/colamd is the entry point. Export
 # COLAMD_APP to override either.
 #
-# Distro case calls the electron binary directly instead of /usr/bin/colamd:
-# that script execs /usr/bin/electron44, which exports
-# ELECTRON_FORCE_IS_PACKAGED=true — and in that mode Electron ignores
-# NODE_OPTIONS, so the frame patch above would never load. Verified with
-# otherwise identical arguments: patch log present without the variable, absent
-# with it (and assigning it the string "false" is not enough — Electron tests
-# the variable's presence, not its value). Everything /usr/bin/colamd wraps
-# around the call is reproduced: CHROME_DESKTOP names the desktop entry (the
-# Wayland app id), LD_LIBRARY_PATH points at /usr/lib/colamd/lib which the
-# distro package does not ship, and --no-sandbox is added only under root.
+# Distro case calls the electron binary directly instead of /usr/bin/colamd.
+# The packaged app must still see itself as packaged: without
+# ELECTRON_FORCE_IS_PACKAGED, app.isPackaged is false, and everything that
+# resolves against process.resourcesPath (demo / templates / app-update.yml)
+# looks below electron's own resources dir and misses. So set the same flag
+# electron44 sets, and pass /usr/lib/colamd/colamd.js — the preload that points
+# process.resourcesPath at /usr/lib/colamd. In packaged mode Electron ignores
+# NODE_OPTIONS (verified: patch log present without the variable, absent with
+# it; assigning the string "false" is not enough — Electron tests the
+# variable's presence, not its value), so the frame patch is repeated through
+# --require below; --require itself is still honored, as colamd.js proves.
+# Everything /usr/bin/colamd wraps around the call is reproduced:
+# CHROME_DESKTOP names the desktop entry (the Wayland app id), LD_LIBRARY_PATH
+# points at /usr/lib/colamd/lib which the distro package does not ship, and
+# --no-sandbox is added only under root.
 APP="${COLAMD_APP:-}"
-# Extra arguments for "$APP": empty for the AppImage, "--app <asar>" for the
-# distro case. Deliberately word-split at the exec below (POSIX sh has no
-# arrays); both are space-free paths, so the split is exact.
+# Extra arguments for "$APP": empty for the AppImage, the colamd preload plus
+# "--app <asar>" for the distro case. Deliberately word-split at the exec below
+# (POSIX sh has no arrays); all of them are space-free paths, so the split is
+# exact.
 APP_ARGS=""
+PACKAGED_DISTRO=0
 if [ -z "$APP" ]; then
   if [ -x "$HOME/.local/bin/colamd.AppImage" ]; then
     APP="$HOME/.local/bin/colamd.AppImage"
   else
     APP="/usr/lib/electron44/electron"
-    APP_ARGS="--app /usr/lib/colamd/app.asar"
+    APP_ARGS="--require /usr/lib/colamd/colamd.js --app /usr/lib/colamd/app.asar"
+    if [ -f "$FRAME_PATCH" ]; then
+      APP_ARGS="--require $FRAME_PATCH $APP_ARGS"
+    fi
+    PACKAGED_DISTRO=1
+    ELECTRON_FORCE_IS_PACKAGED=true
+    export ELECTRON_FORCE_IS_PACKAGED
     CHROME_DESKTOP="colamd.desktop"
     export CHROME_DESKTOP
   fi
+fi
+# The distro branch already loaded the patch with --require; exporting
+# NODE_OPTIONS there is useless (packaged mode drops it) and only adds
+# Electron's "Most NODE_OPTIONs are not supported" noise.
+if [ "$PACKAGED_DISTRO" -eq 0 ] && [ -f "$FRAME_PATCH" ]; then
+  NODE_OPTIONS="--require $FRAME_PATCH${NODE_OPTIONS:+ $NODE_OPTIONS}"
+  export NODE_OPTIONS
 fi
 NODE=""
 for c in "$HOME/.local/share/mise/shims/node" \
