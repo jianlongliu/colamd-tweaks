@@ -43,26 +43,17 @@ body.code-palette-light {
   color: #c44b2b !important;
 }
 
-/* 代码块换等宽字体：Google Sans Code 的 {} 太窄小。
-   必须用 @font-face 直接指向字体文件——按族名请求会被 fontconfig 劫持成
-   另一个字体（fc-match "JetBrains Mono" 返回的不是 JetBrains 即中招）。
-   src 换成自己机器上的路径，fc-list 可以查；路径写错不报错，只是静默回退
-   到 monospace。 */
-@font-face {
-  font-family: "ColaMD Code";
-  src: url("file:///usr/share/fonts/TTF/JetBrainsMonoNerdFont-Regular.ttf");
-}
-@font-face {
-  font-family: "ColaMD Code CN";
-  src: url("file:///usr/share/fonts/maple/MapleMonoNormalNL-NF-CN-Medium.ttf");
-}
-/* 2.7 的类名：代码块 .cm-md-codeblock、行内代码 .cm-md-inlinecode。
-   代码块里的 token 是它的子节点，字体要连子节点一起压，否则 span 会抢回
-   自己的族。 */
+/* 代码块换等宽字体。
+   本机（2026-10-17）：直接用系统装的 Google Sans Code，不挂 @font-face。
+   用 @font-face 指字体文件（WebFont 路径）时，渲染器要把整份字体解析一遍；
+   之前那份把 13MB 的 PingFang 当 WebFont 挂上，实测每次应用主题要 2.6s CPU、
+   去掉后 0.08s（同一进程内切主题，3 轮对调顺序复现）。改用系统族名后字体由
+   fontconfig 管，不再走这条路。路径写错也不报错、只是静默回退。
+   注意 Google Sans Code 不含汉字：代码块里的中文按系统回退链显示。 */
 #editor .cm-content .cm-md-codeblock,
 #editor .cm-content .cm-md-codeblock *,
 #editor .cm-content .cm-md-inlinecode {
-  font-family: "ColaMD Code", "ColaMD Code CN", monospace !important;
+  font-family: "Google Sans Code", monospace !important;
 }
 
 /* 行内代码的字色：内置主题是各自写死的（elegant #c44b2b、bear #d43d2a…），
